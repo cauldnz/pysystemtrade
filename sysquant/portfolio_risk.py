@@ -19,6 +19,7 @@ from sysquant.estimators.covariance import (
 from sysquant.optimisation.weights import portfolioWeights, seriesOfPortfolioWeights
 
 # Taken from https://stackoverflow.com/questions/24983493/tracking-progress-of-joblib-parallel-execution
+# It is avaiable as a PyPi package but just using code-block to reduce dependencies
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
     """Context manager to patch joblib to report into tqdm progress bar given as argument"""
@@ -55,20 +56,14 @@ def calc_portfolio_risk_series(
     risk_list = list()
     common_index = list(portfolio_weights.index)
 
-    #progress = progressBar(
-    #    len(common_index),
-    #    suffix="Calculating portfolio risk",
-    #    show_timings=True,
-    #    show_each_time=False
-    #)
-
     calculate_risk_ = partial(calculate_risk, portfolio_weights=portfolio_weights, 
         list_of_correlations=list_of_correlations, pd_of_stdev=pd_of_stdev)
 
+    # Parallel execution. Uses all CPUs but one (-2) and arbitrary, but relatively large, batch size for efficiency
+    # Has been tested using threads rather than processes, poor performance indicates GIL is held so uses processes
     with tqdm_joblib(tqdm(desc="Calculating portfolio risk", total=len(common_index))) as progress_bar:
-        risk_list = joblib.Parallel(n_jobs=16, prefer="processes", batch_size=100)(joblib.delayed(calculate_risk_)(i) for i in common_index)
+        risk_list = joblib.Parallel(n_jobs=-2, prefer="processes", batch_size=100)(joblib.delayed(calculate_risk_)(i) for i in common_index)
 
-    #progress.finished()
     values, idx = zip(*risk_list)
     risk_series = pd.Series(values,idx).sort_index()
 
