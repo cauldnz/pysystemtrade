@@ -66,7 +66,7 @@ def calc_portfolio_risk_series(
         list_of_correlations=list_of_correlations, pd_of_stdev=pd_of_stdev)
 
     with tqdm_joblib(tqdm(desc="Calculating portfolio risk", total=len(common_index))) as progress_bar:
-        risk_list = joblib.Parallel(n_jobs=16, prefer="threads")(joblib.delayed(calculate_risk_)(i) for i in common_index)
+        risk_list = joblib.Parallel(n_jobs=16, prefer="processes", batch_size=100)(joblib.delayed(calculate_risk_)(i) for i in common_index)
 
     #progress.finished()
     idx, values = zip(*risk_list)
