@@ -69,8 +69,8 @@ def calc_portfolio_risk_series(
         risk_list = joblib.Parallel(n_jobs=16, prefer="processes", batch_size=100)(joblib.delayed(calculate_risk_)(i) for i in common_index)
 
     #progress.finished()
-    idx, values = zip(*risk_list)
-    risk_series = pd.Series(values,idx)
+    values, idx = zip(*risk_list)
+    risk_series = pd.Series(values,idx).sort_index()
 
     return risk_series
 
