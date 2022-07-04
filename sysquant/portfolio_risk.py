@@ -1,6 +1,10 @@
+import contextlib
 import datetime
 import pandas as pd
 from syscore.genutils import progressBar
+from tqdm import tqdm
+import joblib
+from functools import partial
 
 from sysquant.estimators.stdev_estimator import seriesOfStdevEstimates, stdevEstimates
 from sysquant.estimators.correlations import (
@@ -13,6 +17,23 @@ from sysquant.estimators.covariance import (
     covariance_from_stdev_and_correlation,
 )
 from sysquant.optimisation.weights import portfolioWeights, seriesOfPortfolioWeights
+
+# Taken from https://stackoverflow.com/questions/24983493/tracking-progress-of-joblib-parallel-execution
+@contextlib.contextmanager
+def tqdm_joblib(tqdm_object):
+    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()
 
 def calc_sum_annualised_risk_given_portfolio_weights(
         portfolio_weights: seriesOfPortfolioWeights,
@@ -31,30 +52,37 @@ def calc_portfolio_risk_series(
         list_of_correlations: CorrelationList,
         pd_of_stdev: seriesOfStdevEstimates) -> pd.Series:
 
-    risk_series = []
+    risk_list = list()
     common_index = list(portfolio_weights.index)
-    progress = progressBar(
-        len(common_index),
-        suffix="Calculating portfolio risk",
-        show_timings=True,
-        show_each_time=False
-    )
 
-    for relevant_date in common_index:
-        progress.iterate()
-        weights_on_date = portfolio_weights.get_weights_on_date(relevant_date)
+    #progress = progressBar(
+    #    len(common_index),
+    #    suffix="Calculating portfolio risk",
+    #    show_timings=True,
+    #    show_each_time=False
+    #)
 
-        covariance = get_covariance_matrix(list_of_correlations = list_of_correlations,
+    calculate_risk_ = partial(calculate_risk, portfolio_weights=portfolio_weights, 
+        list_of_correlations=list_of_correlations, pd_of_stdev=pd_of_stdev)
+
+    with tqdm_joblib(tqdm(desc="Calculating portfolio risk", total=len(common_index))) as progress_bar:
+        risk_list = joblib.Parallel(n_jobs=16, prefer="threads")(joblib.delayed(calculate_risk_)(i) for i in common_index)
+
+    #progress.finished()
+    idx, values = zip(*risk_list)
+    risk_series = pd.Series(values,idx)
+
+    return risk_series
+
+def calculate_risk(relevant_date, portfolio_weights, list_of_correlations, pd_of_stdev):
+    weights_on_date = portfolio_weights.get_weights_on_date(relevant_date)
+
+    covariance = get_covariance_matrix(list_of_correlations = list_of_correlations,
                                            pd_of_stdev = pd_of_stdev,
                                            relevant_date = relevant_date
                                            )
-        risk_on_date = weights_on_date.portfolio_stdev(covariance)
-        risk_series.append(risk_on_date)
-
-    progress.finished()
-    risk_series = pd.Series(risk_series, common_index)
-
-    return risk_series
+    risk_on_date = weights_on_date.portfolio_stdev(covariance)
+    return tuple([risk_on_date,relevant_date])
 
 def get_covariance_matrix(list_of_correlations: CorrelationList,
                                            pd_of_stdev: seriesOfStdevEstimates,
